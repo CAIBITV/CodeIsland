@@ -55,10 +55,7 @@ public enum ClaudeUsageScanner {
         }
         struct FileEntry: Sendable {
             var consumedBytes: UInt64 = 0
-            var entries: [CachedMessage] = []
-            // Dedupe is per file: an assistant message's continuation lines
-            // repeat its id within the same transcript; ids never straddle files.
-            var seenIds: Set<String> = []
+            var entries: [String: CachedMessage] = [:]
         }
         var files: [String: FileEntry] = [:]
         public init() {}
@@ -127,10 +124,10 @@ public enum ClaudeUsageScanner {
                     if size > entry.consumedBytes {
                         consumeNewLines(path: path, into: &entry)
                     }
-                    entry.entries.removeAll { $0.timestamp < cutoff }
+                    entry.entries = entry.entries.filter { $0.value.timestamp >= cutoff }
                     cache.files[path] = entry
 
-                    for message in entry.entries where message.timestamp <= now {
+                    for message in entry.entries.values where message.timestamp <= now {
                         if message.timestamp >= fiveHoursAgo { last5h.add(message.usage) }
                         if message.timestamp >= midnight { today.add(message.usage) }
                         let hoursAgo = Int(now.timeIntervalSince(message.timestamp) / 3600)
@@ -159,10 +156,17 @@ public enum ClaudeUsageScanner {
         guard let text = String(data: consumable, encoding: .utf8) else { return }
 
         for line in text.split(separator: "\n") {
-            guard let parsed = parseAssistantUsage(String(line)),
-                  !entry.seenIds.contains(parsed.messageId) else { continue }
-            entry.seenIds.insert(parsed.messageId)
-            entry.entries.append(.init(timestamp: parsed.timestamp, usage: parsed.usage))
+            guard let parsed = parseAssistantUsage(String(line)) else { continue }
+            if let previous = entry.entries[parsed.messageId] {
+                var merged = previous.usage
+                merged.inputTokens = max(merged.inputTokens, parsed.usage.inputTokens)
+                merged.outputTokens = max(merged.outputTokens, parsed.usage.outputTokens)
+                merged.cacheCreationTokens = max(merged.cacheCreationTokens, parsed.usage.cacheCreationTokens)
+                merged.cacheReadTokens = max(merged.cacheReadTokens, parsed.usage.cacheReadTokens)
+                entry.entries[parsed.messageId] = .init(timestamp: previous.timestamp, usage: merged)
+            } else {
+                entry.entries[parsed.messageId] = .init(timestamp: parsed.timestamp, usage: parsed.usage)
+            }
         }
     }
 

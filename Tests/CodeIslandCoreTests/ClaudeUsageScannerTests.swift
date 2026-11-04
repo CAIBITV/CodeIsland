@@ -102,6 +102,21 @@ final class ClaudeUsageScannerTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(cache.files[path]?.consumedBytes), consumedAfterFirst)
     }
 
+    func testLaterSnapshotUpdatesExistingMessage() throws {
+        let path = home + "/projects/p1/s.jsonl"
+        try (assistantLine(id: "a", at: noon, input: 100, output: 1) + "\n")
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        var cache = ClaudeUsageScanner.FileCache()
+        XCTAssertEqual(ClaudeUsageScanner.scan(claudeHome: home, now: noon, cache: &cache).today.outputTokens, 1)
+        let file = try XCTUnwrap(FileHandle(forWritingAtPath: path))
+        file.seekToEndOfFile()
+        file.write(Data((assistantLine(id: "a", at: noon, input: 100, output: 300) + "\n").utf8))
+        file.closeFile()
+        let result = ClaudeUsageScanner.scan(claudeHome: home, now: noon, cache: &cache).today
+        XCTAssertEqual(result.messageCount, 1)
+        XCTAssertEqual(result.outputTokens, 300)
+    }
+
     func testIncrementalScanIgnoresPartialTrailingLine() throws {
         let now = noon
         let path = home + "/projects/p1/s.jsonl"
