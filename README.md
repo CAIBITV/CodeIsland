@@ -48,7 +48,7 @@ It works with **30+ AI coding tools**, installs its hooks for you, and keeps eve
 - Live status, current tool and latest reply for every session; finished replies render as Markdown (lists, tables, code)
 - The agent's own task checklist as a progress bar, Claude Code's "while you were away" recap, and (opt-in) model + reasoning effort
 - Git branch and worktree on each card; group sessions by project or tool
-- Claude usage stats, plus opt-in plan limits (5-hour and weekly)
+- Local Claude Code and Codex token usage and estimated session speed, plus opt-in Claude plan limits (5-hour and weekly)
 - A pixel-art mascot per tool, animated by what the agent is doing
 
 </td>

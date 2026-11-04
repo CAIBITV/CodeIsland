@@ -260,6 +260,7 @@ final class AppState {
             }
             if surface.isExpanded {
                 refreshClaudeUsageIfStale()
+                refreshSessionUsage()
                 claudeQuota.noteExpanded()
             } else {
                 claudeQuota.noteCollapsed()
@@ -306,6 +307,10 @@ final class AppState {
     /// Local-transcript token usage shown in the session-list footer.
     /// Refreshed lazily on panel expansion (no resident timer, no API calls).
     var claudeUsage: ClaudeUsageScanner.Snapshot?
+    var codexUsage: ClaudeUsageScanner.Snapshot?
+    var sessionUsage: [String: SessionUsageSnapshot] = [:]
+    @ObservationIgnored private var sessionUsageScanners: [String: SessionUsageScanner] = [:]
+    @ObservationIgnored private var sessionUsageScanInFlight = false
     /// Subscription rate limits (5h / weekly) from Anthropic — opt-in, network.
     let claudeQuota = ClaudeQuotaMonitor()
     /// Process-wide, not per-instance: the scan reads one shared history
@@ -318,6 +323,7 @@ final class AppState {
     /// Incremental parse state — round-trips through each detached scan so
     /// growing transcripts are only read past their last consumed offset.
     private var usageFileCache = ClaudeUsageScanner.FileCache()
+    private var codexUsageFileCache = CodexUsageScanner.FileCache()
 
     /// Glance completion mode: an agent finished while the pill was collapsed —
     /// light the dot instead of expanding. Cleared when the user expands the
@@ -515,6 +521,7 @@ final class AppState {
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.cleanupIdleSessions()
+                if self?.surface.isExpanded == true { self?.refreshSessionUsage() }
             }
         }
     }
@@ -1240,6 +1247,44 @@ final class AppState {
         }
     }
 
+    /// 展开期间只增量读取本地会话文件；远程会话的路径属于远端主机。
+    func refreshSessionUsage() {
+        guard UserDefaults.standard.bool(forKey: SettingsKey.showSessionUsage), !sessionUsageScanInFlight else { return }
+        let targets = sessions.compactMap { id, session -> (String, String, String)? in
+            guard !session.isRemote, (session.source == "claude" || session.source == "codex"),
+                  let path = session.transcriptPath, !path.isEmpty else { return nil }
+            return (id, path, session.source)
+        }
+        guard !targets.isEmpty else { sessionUsage = [:]; sessionUsageScanners = [:]; return }
+        sessionUsageScanInFlight = true
+        let previous = sessionUsageScanners
+        Task.detached(priority: .utility) { [weak self] in
+            var scanners: [String: SessionUsageScanner] = [:]
+            var results: [String: SessionUsageSnapshot] = [:]
+            for (id, path, source) in targets {
+                let key = source + ":" + path
+                var scanner = scanners[key] ?? previous[key] ?? SessionUsageScanner()
+                if let usage = scanner.scan(path: path, source: source) { results[id] = usage }
+                scanners[key] = scanner
+            }
+            let finalResults = results
+            let finalScanners = scanners
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.sessionUsageScanInFlight = false
+                guard UserDefaults.standard.bool(forKey: SettingsKey.showSessionUsage) else { return }
+                let valid = Dictionary(uniqueKeysWithValues: targets.compactMap { id, path, source -> (String, SessionUsageSnapshot)? in
+                    guard let session = self.sessions[id], !session.isRemote,
+                          session.transcriptPath == path, session.source == source,
+                          let usage = finalResults[id] else { return nil }
+                    return (id, usage)
+                })
+                self.sessionUsage = valid
+                self.sessionUsageScanners = finalScanners
+            }
+        }
+    }
+
     /// Prewarm at launch so the footer doesn't pop in (and shift panel height)
     /// on the first expansion.
     func refreshClaudeUsageIfStale() {
@@ -1248,15 +1293,22 @@ final class AppState {
         if let scannedAt = claudeUsage?.scannedAt, Date().timeIntervalSince(scannedAt) < 120 { return }
         Self.usageScanInFlight = true
         let cacheCopy = usageFileCache
+        let codexCacheCopy = codexUsageFileCache
+        let codexHomes = ConfigInstaller.codexHomes()
         Task.detached(priority: .utility) {
             var cache = cacheCopy
+            var codexCache = codexCacheCopy
             let snapshot = ClaudeUsageScanner.scan(claudeHomes: ClaudeConfigPaths.allConfigDirs(), cache: &cache)
+            let codexSnapshot = CodexUsageScanner.scan(codexHomes: codexHomes, cache: &codexCache)
+            let scannedCodexCache = codexCache
             // Bound to a `let` before the hop: capturing the `var` in the
             // concurrently-executing closure is an error under Swift 6.
             let scannedCache = cache
             await MainActor.run { [weak self] in
                 self?.claudeUsage = snapshot
+                self?.codexUsage = codexSnapshot
                 self?.usageFileCache = scannedCache
+                self?.codexUsageFileCache = scannedCodexCache
                 AppState.usageScanInFlight = false
             }
         }

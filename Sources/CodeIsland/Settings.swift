@@ -84,6 +84,7 @@ enum SettingsKey {
 
     // Token-usage footer (local Claude transcript aggregation)
     static let showUsageStats = "showUsageStats"
+    static let showSessionUsage = "showSessionUsage"
 
     // Claude plan limits (Anthropic usage endpoint via the Claude Code login)
     static let showClaudeQuota = "showClaudeQuota"
@@ -214,6 +215,7 @@ struct SettingsDefaults {
     static let showSessionRecap = true
     static let showModelLabel = false
     static let showUsageStats = true
+    static let showSessionUsage = true
     static let showClaudeQuota = false
     static let claudeQuotaChip = "auto"
 
@@ -318,6 +320,7 @@ class SettingsManager {
             SettingsKey.showSessionRecap: SettingsDefaults.showSessionRecap,
             SettingsKey.showModelLabel: SettingsDefaults.showModelLabel,
             SettingsKey.showUsageStats: SettingsDefaults.showUsageStats,
+            SettingsKey.showSessionUsage: SettingsDefaults.showSessionUsage,
             SettingsKey.showClaudeQuota: SettingsDefaults.showClaudeQuota,
             SettingsKey.claudeQuotaChip: SettingsDefaults.claudeQuotaChip,
             SettingsKey.rotationInterval: SettingsDefaults.rotationInterval,

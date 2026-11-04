@@ -58,6 +58,31 @@ final class PanelFitLayoutTests: XCTestCase {
         XCTAssertGreaterThan(try panel.gapUnderPanel(), 0, "the session list runs off the bottom of the window")
     }
 
+    func testSessionUsageFitsInTallSessionList() throws {
+        UserDefaults.standard.set(true, forKey: SettingsKey.showSessionUsage)
+        UserDefaults.standard.set(16, forKey: SettingsKey.contentFontSize)
+        let state = try tallSessions(count: 4)
+        defer { state.release() }
+        var summary = ClaudeUsageTotals()
+        summary.messageCount = 1
+        summary.outputTokens = 9_000
+        let snapshot = ClaudeUsageScanner.Snapshot(last5h: summary, today: summary, hourlyOutputTokens: [1, 2, 3], scannedAt: Date())
+        state.state.claudeUsage = snapshot
+        state.state.codexUsage = snapshot
+        UserDefaults.standard.set(true, forKey: SettingsKey.showUsageStats)
+        for id in state.state.sessions.keys {
+            var usage = SessionUsageSnapshot()
+            usage.inputTokens = 125_000
+            usage.outputTokens = 9_000
+            usage.estimatedTokensPerSecond = 42
+            state.state.sessionUsage[id] = usage
+        }
+        let panel = try PanelHost(state.state, notchHeight: 37)
+        defer { panel.close() }
+        panel.settle()
+        XCTAssertGreaterThan(try panel.gapUnderPanel(), 0)
+    }
+
     func testSqueezedBranchKeepsAFewCharacters() {
         // A long project name used to leave the branch an icon and "…".
         let short = BranchLabelMetrics.minimumWidth(for: "main", fontSize: 11)

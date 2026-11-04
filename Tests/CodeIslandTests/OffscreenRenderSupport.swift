@@ -245,7 +245,7 @@ struct DefaultsSandbox {
             SettingsKey.sessionGroupingMode, SettingsKey.defaultSource, SettingsKey.soundEnabled,
             SettingsKey.quietHoursEnabled, SettingsKey.quietHoursStart, SettingsKey.quietHoursEnd,
             SettingsKey.autoCollapseAfterSessionJump, SettingsKey.maxVisibleSessions,
-            SettingsKey.showUsageStats, SettingsKey.showClaudeQuota, SettingsKey.showGitBranch,
+            SettingsKey.showUsageStats, SettingsKey.showSessionUsage, SettingsKey.showClaudeQuota, SettingsKey.showGitBranch,
             SettingsKey.aiMessageLines, SettingsKey.mascotSpeed, SettingsKey.notchHeightMode,
             SettingsKey.customNotchHeight, SettingsKey.collapseOnMouseLeave, SettingsKey.maxToolHistory,
             SettingsKey.showSessionRecap, SettingsKey.showModelLabel, SettingsKey.showTaskProgress,

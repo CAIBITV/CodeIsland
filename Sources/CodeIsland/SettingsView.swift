@@ -1345,6 +1345,7 @@ private struct AppearancePage: View {
     @AppStorage(SettingsKey.showModelLabel) private var showModelLabel = SettingsDefaults.showModelLabel
     @AppStorage(SettingsKey.showProjectName) private var showProjectName = SettingsDefaults.showProjectName
     @AppStorage(SettingsKey.showUsageStats) private var showUsageStats = SettingsDefaults.showUsageStats
+    @AppStorage(SettingsKey.showSessionUsage) private var showSessionUsage = SettingsDefaults.showSessionUsage
     @AppStorage(SettingsKey.showClaudeQuota) private var showClaudeQuota = SettingsDefaults.showClaudeQuota
     @AppStorage(SettingsKey.claudeQuotaChip) private var claudeQuotaChip = SettingsDefaults.claudeQuotaChip
     @AppStorage(SettingsKey.collapsedWidthScale) private var collapsedWidthScale = SettingsDefaults.collapsedWidthScale
@@ -1509,6 +1510,12 @@ private struct AppearancePage: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle(l10n["show_model_label"], isOn: $showModelLabel)
                     Text(l10n["show_model_label_desc"])
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Toggle(l10n["show_session_usage"], isOn: $showSessionUsage)
+                    Text(l10n["show_session_usage_desc"])
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }

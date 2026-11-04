@@ -3491,7 +3491,7 @@ enum UsageFooterText {
 
     /// Token totals for a tooltip: where they come from, then each window
     /// with what its "in" is made of.
-    static func usageTooltip(_ usage: ClaudeUsageScanner.Snapshot, l10n: L10n) -> String {
+    static func usageTooltip(_ usage: ClaudeUsageScanner.Snapshot, l10n: L10n, title: String? = nil) -> String {
         func breakdown(_ t: ClaudeUsageTotals) -> String {
             "  " + String(
                 format: l10n["usage_tooltip_breakdown"],
@@ -3501,7 +3501,7 @@ enum UsageFooterText {
             )
         }
         return [
-            l10n["usage_tooltip_title"],
+            title ?? l10n["usage_tooltip_title"],
             leading(last5h(usage, l10n: l10n)), breakdown(usage.last5h),
             today(usage, l10n: l10n), breakdown(usage.today),
         ].joined(separator: "\n")
@@ -3574,6 +3574,9 @@ private struct SessionListFooter: View {
         }
         if content.tokens, let usage {
             UsageFooterLine(usage: usage)
+        }
+        if let codex = UsageFooterText.shownUsage(appState.codexUsage, enabled: showUsageStats) {
+            UsageFooterLine(usage: codex, brand: "Codex", tooltipTitle: L10n.shared["codex_usage_tooltip_title"])
         }
         if content.quotaMessage, let error {
             QuotaFooterMessage(error: error)
@@ -3706,12 +3709,14 @@ private struct QuotaFooterMessage: View {
 /// (new input + cache writes); the tooltip breaks it down.
 private struct UsageFooterLine: View {
     let usage: ClaudeUsageScanner.Snapshot
+    var brand = "Claude"
+    var tooltipTitle: String? = nil
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
         let last5h = UsageFooterText.last5h(usage, l10n: l10n)
         let today = UsageFooterText.today(usage, l10n: l10n)
-        let tooltip = UsageFooterText.usageTooltip(usage, l10n: l10n)
+        let tooltip = UsageFooterText.usageTooltip(usage, l10n: l10n, title: tooltipTitle)
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Image(systemName: "gauge.with.needle")
                 .font(.system(size: 9, weight: .semibold))
@@ -3755,7 +3760,7 @@ private struct UsageFooterLine: View {
     private func span5h(_ last5h: String, brand: Bool) -> some View {
         HStack(spacing: 5) {
             if brand {
-                Text("Claude").fontWeight(.semibold)
+                Text(self.brand).fontWeight(.semibold)
                 Text("·").foregroundStyle(.white.opacity(0.5))
                 Text(last5h)
             } else {
@@ -4205,6 +4210,7 @@ private struct SessionCard: View {
     @AppStorage(SettingsKey.showTaskProgress) private var showTaskProgress = SettingsDefaults.showTaskProgress
     @AppStorage(SettingsKey.showSessionRecap) private var showSessionRecap = SettingsDefaults.showSessionRecap
     @AppStorage(SettingsKey.showModelLabel) private var showModelLabel = SettingsDefaults.showModelLabel
+    @AppStorage(SettingsKey.showSessionUsage) private var showSessionUsage = SettingsDefaults.showSessionUsage
     @AppStorage(SettingsKey.showProjectName) private var showProjectName = SettingsDefaults.showProjectName
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
     private var aiLineLimit: Int? { aiMessageLines > 0 ? aiMessageLines : nil }
@@ -4282,6 +4288,9 @@ private struct SessionCard: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 comfortableHeader
+                if showSessionUsage, let usage = appState.sessionUsage[sessionId] {
+                    sessionUsageLine(usage)
+                }
 
                 // Inline approval controls (when user keeps panel in session list)
                 if session.status == .waitingApproval, let idx = approvalQueueIndex {
@@ -4331,6 +4340,17 @@ private struct SessionCard: View {
         .padding(.vertical, 10)
         .background(cardBackground(cornerRadius: 10))
         .padding(.horizontal, 6)
+    }
+
+    private func sessionUsageLine(_ usage: SessionUsageSnapshot) -> some View {
+        let label = SessionUsageText.line(usage)
+        let help = SessionUsageText.help(usage)
+        return Text(label)
+            .font(.system(size: max(9, fontSize - 2), weight: .medium, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.58))
+            .lineLimit(1)
+            .help(help)
+            .accessibilityLabel(label + ". " + help)
     }
 
     /// Character + subagent icons.
@@ -4719,12 +4739,14 @@ private struct SessionCard: View {
 
     /// The row keeps one line; the hover shows who it is and the latest reply.
     private var compactTooltip: String {
-        CompactSessionRowMetrics.tooltip(
+        let base = CompactSessionRowMetrics.tooltip(
             name: session.headline(showProjectName: showProjectName).text,
             latest: session.lastAssistantMessage.map(stripDirectives)
                 ?? session.visibleRecap?.text
                 ?? session.lastUserPrompt
         )
+        guard showSessionUsage, let usage = appState.sessionUsage[sessionId] else { return base }
+        return base + "\n" + SessionUsageText.line(usage) + "\n" + SessionUsageText.help(usage)
     }
 
     // MARK: Shared
@@ -5690,6 +5712,30 @@ struct MiniAgentIcon: View {
 }
 
 // MARK: - Shared Helpers
+
+/// 会话卡片的用量行与悬停说明，完整卡片和紧凑行共用。
+enum SessionUsageText {
+    /// "输入 1.2K · 输出 300 · ≈ 42 tok/s"
+    static func line(_ usage: SessionUsageSnapshot, l10n: L10n = .shared) -> String {
+        let format = ClaudeUsageScanner.formatTokens
+        let speed = usage.speedText.map { " · " + $0 } ?? ""
+        return String(format: l10n["session_usage_line"], format(usage.inputTokens), format(usage.outputTokens), speed)
+    }
+
+    /// 累计明细，再按有无数据补速度口径与首字。
+    static func help(_ usage: SessionUsageSnapshot, l10n: L10n = .shared) -> String {
+        let format = ClaudeUsageScanner.formatTokens
+        var parts = [String(format: l10n["session_usage_help"], format(usage.inputTokens), format(usage.outputTokens),
+                            format(usage.cacheReadTokens), format(usage.cacheWriteTokens))]
+        if let speed = usage.speedText {
+            parts.append(String(format: l10n["session_usage_speed_help"], speed, usage.speedSampleCount))
+        }
+        if let firstToken = usage.firstTokenText {
+            parts.append(String(format: l10n["session_usage_first_token_help"], firstToken))
+        }
+        return parts.joined(separator: " ")
+    }
+}
 
 /// Generate a short session ID with better disambiguation.
 private func shortSessionId(_ id: String) -> String {
