@@ -32,6 +32,19 @@ final class ClaudeDesktopSupportTests: XCTestCase {
         XCTAssertFalse(session.isNativeAppMode)
     }
 
+    func testDesktopClaudeTurnDoesNotSettleOnSilence() {
+        // 模型在两次工具调用之间想上一两分钟很常见；回合结束以 Stop hook 为准。
+        let desktop = makeSession(termBundleId: "com.anthropic.claudefordesktop", source: "claude")
+        XCTAssertFalse(AppState.nativeAppTurnSettlesOnSilence(desktop))
+    }
+
+    func testOtherNativeAppsStillSettleOnSilence() {
+        let codexApp = makeSession(termBundleId: "com.openai.codex", source: "codex")
+        XCTAssertTrue(AppState.nativeAppTurnSettlesOnSilence(codexApp))
+        let terminal = makeSession(termBundleId: "com.googlecode.iterm2", source: "claude")
+        XCTAssertFalse(AppState.nativeAppTurnSettlesOnSilence(terminal))
+    }
+
     func testClickJumpDoesNotStealTerminalClaudeSessions() {
         // The source→bundle fallback list must NOT contain claude: most claude
         // sessions are terminal CLI runs, and the fallback would redirect their

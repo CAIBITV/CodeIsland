@@ -639,15 +639,16 @@ final class AppState {
                 continue
             }
             guard processMonitor.isWatching(key) else { continue }
+            let settlesOnSilence = Self.nativeAppTurnSettlesOnSilence(session)
             // Native apps write transcripts synchronously — if the transcript check below
             // didn't find a stop marker after 30s, the session is almost certainly idle.
-            if session.isNativeAppMode, elapsed > nativeAppThinkingTimeout {
+            if settlesOnSilence, elapsed > nativeAppThinkingTimeout {
                 sessions[key]?.status = .idle
                 continue
             }
             // Before that, the turn's end in its transcript settles it: read
             // off the main actor, applied when the read lands.
-            if session.isNativeAppMode, elapsed >= codexTerminalTurnSettleTime {
+            if settlesOnSilence, elapsed >= codexTerminalTurnSettleTime {
                 checkNativeAppTurnEnded(sessionId: key, session: session, settleTime: codexTerminalTurnSettleTime)
                 continue
             }
@@ -746,6 +747,14 @@ final class AppState {
     /// and reads the transcript's tail, so it runs off the main actor; the
     /// card is settled when it lands if it is still the same quiet,
     /// monitored, thinking card.
+    /// 原生 App 会话"思考中"静默时，能否按 30 秒规则或读记录判定回合结束。
+    /// Claude Code 桌面版不行：它每个回合都可靠地发 Stop hook，而模型在两次工具
+    /// 调用之间常常要想一两分钟，按静默判空闲会让还在跑的卡片显示"已完成"。
+    /// 它和终端里的 Claude 一样，只用 300 秒的兜底。
+    nonisolated static func nativeAppTurnSettlesOnSilence(_ session: SessionSnapshot) -> Bool {
+        session.isNativeAppMode && session.source != "claude"
+    }
+
     func checkNativeAppTurnEnded(sessionId: String, session: SessionSnapshot, settleTime: TimeInterval) {
         guard nativeAppTurnReadsInFlight.insert(sessionId).inserted else { return }
         let read = storeReaders.nativeAppFinishedTurn
