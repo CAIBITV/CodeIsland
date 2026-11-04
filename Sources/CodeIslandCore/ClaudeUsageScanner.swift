@@ -42,6 +42,23 @@ public enum ClaudeUsageScanner {
             self.hourlyOutputTokens = hourlyOutputTokens
             self.scannedAt = scannedAt
         }
+
+        /// 多个来源相加：各窗口累加，每小时柱逐个相加，扫描时间取最晚。
+        public static func merged(_ snapshots: [Snapshot]) -> Snapshot? {
+            guard let first = snapshots.first else { return nil }
+            var last5h = ClaudeUsageTotals()
+            var today = ClaudeUsageTotals()
+            var hourly = [Int](repeating: 0, count: first.hourlyOutputTokens.count)
+            for snapshot in snapshots {
+                last5h.add(snapshot.last5h)
+                today.add(snapshot.today)
+                for (index, value) in snapshot.hourlyOutputTokens.enumerated() where index < hourly.count {
+                    hourly[index] += value
+                }
+            }
+            let scannedAt = snapshots.map(\.scannedAt).max() ?? first.scannedAt
+            return Snapshot(last5h: last5h, today: today, hourlyOutputTokens: hourly, scannedAt: scannedAt)
+        }
     }
 
     /// Per-file incremental parse state. Transcripts are append-only, so each

@@ -1285,6 +1285,11 @@ final class AppState {
         }
     }
 
+    /// 岛上本地会话来自哪些工具；远程会话的用量不在本机日志里，不算。
+    var localSessionSources: Set<String> {
+        Set(sessions.values.lazy.filter { !$0.isRemote }.map(\.source))
+    }
+
     /// Prewarm at launch so the footer doesn't pop in (and shift panel height)
     /// on the first expansion.
     func refreshClaudeUsageIfStale() {
@@ -1293,13 +1298,15 @@ final class AppState {
         if let scannedAt = claudeUsage?.scannedAt, Date().timeIntervalSince(scannedAt) < 120 { return }
         Self.usageScanInFlight = true
         let cacheCopy = usageFileCache
-        let codexCacheCopy = codexUsageFileCache
-        let codexHomes = ConfigInstaller.codexHomes()
+        // 设置里关掉的 Codex 不扫描，底部也就不显示。
+        let codexEnabled = ConfigInstaller.isEnabled(source: "codex")
+        let codexCacheCopy = codexEnabled ? codexUsageFileCache : CodexUsageScanner.FileCache()
+        let codexHomes = codexEnabled ? ConfigInstaller.codexHomes() : []
         Task.detached(priority: .utility) {
             var cache = cacheCopy
             var codexCache = codexCacheCopy
             let snapshot = ClaudeUsageScanner.scan(claudeHomes: ClaudeConfigPaths.allConfigDirs(), cache: &cache)
-            let codexSnapshot = CodexUsageScanner.scan(codexHomes: codexHomes, cache: &codexCache)
+            let codexSnapshot = codexEnabled ? CodexUsageScanner.scan(codexHomes: codexHomes, cache: &codexCache) : nil
             let scannedCodexCache = codexCache
             // Bound to a `let` before the hop: capturing the `var` in the
             // concurrently-executing closure is an error under Swift 6.

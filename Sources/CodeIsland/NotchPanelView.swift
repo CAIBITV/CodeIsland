@@ -3452,6 +3452,59 @@ struct SessionListFooterContent: Equatable {
     }
 }
 
+/// 底部 token 用量行列哪些工具：设置里启用、且岛上有它的本地会话；岛上没有
+/// 本地会话时只留 Claude（与原版一致）。超过 `maxLines` 个就合并成一行合计，
+/// 悬停再逐个拆开，接入再多工具底部也不会无限变长。
+struct UsageFooterSources: Equatable {
+    struct Entry: Equatable {
+        let source: String
+        let usage: ClaudeUsageScanner.Snapshot
+    }
+
+    static let maxLines = 2
+
+    /// 各占一行的工具。
+    var lines: [Entry] = []
+    /// 合并成一行合计的工具；为空时没有合计行。
+    var merged: [Entry] = []
+
+    /// `excluding`：已在别处显示的工具（套餐额度行已带上 Claude 的用量）。
+    static func resolve(
+        _ candidates: [Entry],
+        sessionSources: Set<String>,
+        excluding: Set<String> = [],
+        isEnabled: (String) -> Bool
+    ) -> Self {
+        let relevant = candidates.filter { entry in
+            !excluding.contains(entry.source) && isEnabled(entry.source)
+                && (sessionSources.contains(entry.source) || (sessionSources.isEmpty && entry.source == "claude"))
+        }
+        return relevant.count > maxLines ? Self(merged: relevant) : Self(lines: relevant)
+    }
+
+    /// 行首的工具名。
+    static func brand(_ source: String) -> String {
+        switch source {
+        case "claude": return "Claude"
+        case "codex": return "Codex"
+        default: return source.prefix(1).uppercased() + source.dropFirst()
+        }
+    }
+
+    /// 悬停说明的标题；Claude 用默认标题。
+    static func tooltipTitle(_ source: String, l10n: L10n) -> String? {
+        source == "codex" ? l10n["codex_usage_tooltip_title"] : nil
+    }
+
+    /// 合计行的悬停说明：每个工具各一段。
+    static func mergedTooltip(_ entries: [Entry], l10n: L10n) -> String {
+        entries.map { entry in
+            UsageFooterText.usageTooltip(entry.usage, l10n: l10n,
+                title: tooltipTitle(entry.source, l10n: l10n) ?? brand(entry.source))
+        }.joined(separator: "\n\n")
+    }
+}
+
 /// The footer's words: token totals ("last 5h: 422K in · 96K out") and the
 /// plan-limit tooltip ("5h 64% · resets in 2h20m · …").
 enum UsageFooterText {
@@ -3572,11 +3625,21 @@ private struct SessionListFooter: View {
         if content.limits, let snapshot {
             QuotaFooterLine(snapshot: snapshot, error: error, usage: usage)
         }
-        if content.tokens, let usage {
-            UsageFooterLine(usage: usage)
+        let candidates = [("claude", usage), ("codex", UsageFooterText.shownUsage(appState.codexUsage, enabled: showUsageStats))]
+            .compactMap { source, usage in usage.map { UsageFooterSources.Entry(source: source, usage: $0) } }
+        let sources = UsageFooterSources.resolve(
+            candidates,
+            sessionSources: appState.localSessionSources,
+            excluding: content.limits ? ["claude"] : [],
+            isEnabled: ConfigInstaller.isEnabled(source:)
+        )
+        ForEach(sources.lines, id: \.source) { entry in
+            UsageFooterLine(usage: entry.usage, brand: UsageFooterSources.brand(entry.source),
+                            tooltipTitle: UsageFooterSources.tooltipTitle(entry.source, l10n: L10n.shared))
         }
-        if let codex = UsageFooterText.shownUsage(appState.codexUsage, enabled: showUsageStats) {
-            UsageFooterLine(usage: codex, brand: "Codex", tooltipTitle: L10n.shared["codex_usage_tooltip_title"])
+        if let total = ClaudeUsageScanner.Snapshot.merged(sources.merged.map(\.usage)) {
+            UsageFooterLine(usage: total, brand: L10n.shared["usage_total"],
+                            tooltipOverride: UsageFooterSources.mergedTooltip(sources.merged, l10n: L10n.shared))
         }
         if content.quotaMessage, let error {
             QuotaFooterMessage(error: error)
@@ -3711,12 +3774,14 @@ private struct UsageFooterLine: View {
     let usage: ClaudeUsageScanner.Snapshot
     var brand = "Claude"
     var tooltipTitle: String? = nil
+    /// 合计行用：逐个工具拆开的说明。
+    var tooltipOverride: String? = nil
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
         let last5h = UsageFooterText.last5h(usage, l10n: l10n)
         let today = UsageFooterText.today(usage, l10n: l10n)
-        let tooltip = UsageFooterText.usageTooltip(usage, l10n: l10n, title: tooltipTitle)
+        let tooltip = tooltipOverride ?? UsageFooterText.usageTooltip(usage, l10n: l10n, title: tooltipTitle)
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Image(systemName: "gauge.with.needle")
                 .font(.system(size: 9, weight: .semibold))

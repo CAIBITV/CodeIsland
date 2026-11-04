@@ -44,6 +44,7 @@ final class L10n: ObservableObject {
     ]
 
     private static let en: [String: String] = [
+        "usage_total": "Total",
         "codex_usage_tooltip_title": "Codex tokens, from local transcripts; inherited history is excluded",
         "show_session_usage": "Show session token usage",
         "show_session_usage_desc": "Show local Claude Code and Codex transcript usage on session cards. Speed is estimated from the last few requests and includes first-token wait.",
@@ -1261,6 +1262,7 @@ final class L10n: ObservableObject {
     ]) { _, localized in localized }
 
     private static let zh: [String: String] = [
+        "usage_total": "合计",
         "codex_usage_tooltip_title": "Codex token 用量（来自本地记录，不含继承历史）",
         "show_session_usage": "显示会话 Token 用量",
         "show_session_usage_desc": "在会话卡片显示本地 Claude Code 和 Codex 日志用量。速度按最近几次请求估算，包含首字等待时间。",
