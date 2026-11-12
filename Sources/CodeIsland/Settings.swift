@@ -88,6 +88,7 @@ enum SettingsKey {
 
     // Claude plan limits (Anthropic usage endpoint via the Claude Code login)
     static let showClaudeQuota = "showClaudeQuota"
+    static let showCodexQuota = "showCodexQuota"
     static let claudeQuotaChip = "claudeQuotaChip"              // ClaudeQuotaChipMode raw value
 
     // Completion notification: "expand" | "glance" | "off". Successor of the
@@ -217,6 +218,7 @@ struct SettingsDefaults {
     static let showUsageStats = true
     static let showSessionUsage = true
     static let showClaudeQuota = false
+    static let showCodexQuota = false
     static let claudeQuotaChip = "auto"
 
     static let rotationInterval = 5
@@ -322,6 +324,7 @@ class SettingsManager {
             SettingsKey.showUsageStats: SettingsDefaults.showUsageStats,
             SettingsKey.showSessionUsage: SettingsDefaults.showSessionUsage,
             SettingsKey.showClaudeQuota: SettingsDefaults.showClaudeQuota,
+            SettingsKey.showCodexQuota: SettingsDefaults.showCodexQuota,
             SettingsKey.claudeQuotaChip: SettingsDefaults.claudeQuotaChip,
             SettingsKey.rotationInterval: SettingsDefaults.rotationInterval,
             SettingsKey.maxToolHistory: SettingsDefaults.maxToolHistory,

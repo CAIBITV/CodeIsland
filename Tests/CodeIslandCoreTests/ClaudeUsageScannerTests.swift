@@ -102,6 +102,28 @@ final class ClaudeUsageScannerTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(cache.files[path]?.consumedBytes), consumedAfterFirst)
     }
 
+    func testHistoryUsesCalendarDaysAcrossDaylightSavingAndDeduplicates() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 9, hour: 12)))
+        let days = UsageHistoryDays.dates(endingAt: now, calendar: calendar)
+        XCTAssertEqual(days.count, 7)
+        XCTAssertEqual(days[6].timeIntervalSince(days[5]), 23 * 3600)
+        let old = assistantLine(id: "old", at: days[0].addingTimeInterval(-1), input: 1000, output: 500)
+        let first = assistantLine(id: "first", at: days[0], input: 12, output: 4, cacheWrite: 6, cacheRead: 8)
+        let midnight = assistantLine(id: "midnight", at: days[6], input: 5, output: 7)
+        try ([old, first, first, midnight].joined(separator: "\n") + "\n")
+            .write(toFile: home + "/projects/p1/s.jsonl", atomically: true, encoding: .utf8)
+
+        var cache = ClaudeUsageScanner.FileCache()
+        let snapshot = ClaudeUsageScanner.scan(claudeHomes: [home], now: now, calendar: calendar,
+                                              includeHistory: true, cache: &cache)
+        XCTAssertEqual(Set(snapshot.dailyTotals.keys), [days[0], days[6]])
+        XCTAssertEqual(snapshot.dailyTotals[days[0]]?.recordedTokens, 30)
+        XCTAssertEqual(snapshot.dailyTotals[days[6]], snapshot.today)
+        XCTAssertTrue(snapshot.last5h.isEmpty)
+    }
+
     func testLaterSnapshotUpdatesExistingMessage() throws {
         let path = home + "/projects/p1/s.jsonl"
         try (assistantLine(id: "a", at: noon, input: 100, output: 1) + "\n")

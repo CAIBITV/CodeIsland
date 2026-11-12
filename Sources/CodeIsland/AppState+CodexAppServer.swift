@@ -81,8 +81,12 @@ extension AppState {
         }
 
         let client = CodexAppServerClient(executableURL: executable)
-        client.onMessage = { [weak self] message in
-            Task { @MainActor in self?.handleCodexAppServerMessage(message) }
+        let accountKey = UsageDetailMonitor.currentCodexAccountKey()
+        client.onMessage = { [weak self, weak client] message in
+            Task { @MainActor in
+                guard let self, let client, self.codexAppServerClient === client else { return }
+                self.handleCodexAppServerMessage(message, accountKey: accountKey)
+            }
         }
         client.onExit = { [weak self, weak client] _ in
             Task { @MainActor in
@@ -233,7 +237,7 @@ extension AppState {
 
     // MARK: - Notification dispatch
 
-    func handleCodexAppServerMessage(_ message: CodexJSONRPCMessage) {
+    func handleCodexAppServerMessage(_ message: CodexJSONRPCMessage, accountKey: String? = nil) {
         let params = message.raw["params"]?.asObject ?? [:]
 
         switch message.kind {
@@ -247,6 +251,10 @@ extension AppState {
                 applyCodexThreadClosedNotification(params: params)
             case "serverRequest/resolved":
                 applyCodexServerRequestResolvedNotification(params: params)
+            case "account/rateLimits/updated":
+                if let accountKey { usageDetails.receiveCodexLimits(params, accountKey: accountKey) }
+            case "account/updated":
+                usageDetails.codexLoginDidChange()
             default:
                 break
             }

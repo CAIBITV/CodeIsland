@@ -1146,6 +1146,7 @@ struct ConfigInstaller {
 
     static func uninstall() {
         let fm = FileManager.default
+        _ = setClaudeQuotaStatusline(connected: false)
         try? fm.removeItem(atPath: hookScriptPath)
         try? fm.removeItem(atPath: bridgePath)
         // Also clean up legacy paths (#32)
@@ -3378,6 +3379,77 @@ struct ConfigInstaller {
     }
 
     // MARK: - Bridge & Hook Script
+
+    enum ClaudeQuotaStatuslineSetup: Equatable {
+        case unavailable, connect, connected, custom
+    }
+
+    private static var claudeQuotaCommandPrefix: String {
+        let escaped = bridgePath.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)' \(ClaudeQuotaStatusline.bridgeFlag) "
+    }
+
+    private static func ownsClaudeQuotaStatusline(_ value: Any?) -> Bool {
+        guard let statusline = value as? [String: Any], statusline["type"] as? String == "command",
+              let command = statusline["command"] as? String,
+              command.hasPrefix(claudeQuotaCommandPrefix) else { return false }
+        let key = command.dropFirst(claudeQuotaCommandPrefix.count)
+        return key.utf8.count == 64 && key.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    static func claudeQuotaStatuslineSetup(profile: ClaudeQuotaStatusline.Profile?) -> ClaudeQuotaStatuslineSetup {
+        let path = ClaudeConfigPaths.settingsPath()
+        let value = parseJSONFile(at: path, fm: .default)?["statusLine"]
+        if ownsClaudeQuotaStatusline(value) {
+            let command = (value as? [String: Any])?["command"] as? String
+            if let profile, command != claudeQuotaCommandPrefix + profile.key { return .connect }
+            return .connected
+        }
+        guard profile != nil else { return .unavailable }
+        return value == nil ? .connect : .custom
+    }
+
+    static func claudeQuotaStatuslineCommand(profile: ClaudeQuotaStatusline.Profile) -> String? {
+        let fm = FileManager.default
+        prepareCodeislandDir()
+        installBridgeBinary(fm: fm)
+        guard fm.isExecutableFile(atPath: bridgePath) else { return nil }
+        return claudeQuotaCommandPrefix + profile.key
+    }
+
+    /// 只管理 CodeIsland 自己的状态栏命令，保留用户已有的状态栏和其他配置。
+    static func setClaudeQuotaStatusline(connected: Bool) -> Bool {
+        guard !RuntimeEnvironment.isRunningTests, !RuntimeEnvironment.isIsolated else { return false }
+        let path = ClaudeConfigPaths.settingsPath()
+        let fm = FileManager.default
+        let original: String
+        if fm.fileExists(atPath: path) {
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+            original = text
+        } else {
+            if !connected { return true }
+            original = "{}\n"
+        }
+        guard let settings = parseJSONString(original) else { return false }
+        let statusline = settings["statusLine"]
+        let ours = ownsClaudeQuotaStatusline(statusline)
+        let updated: String?
+        if connected {
+            guard statusline == nil || ours,
+                  let profile = ClaudeQuotaStatusline.Profile(configDir: ClaudeConfigPaths.configDir()),
+                  let command = claudeQuotaStatuslineCommand(profile: profile) else { return false }
+            var entry = statusline as? [String: Any] ?? ["type": "command"]
+            entry["command"] = command
+            updated = JSONMinimalEditor.setTopLevelValue(in: original, key: "statusLine", value: entry)
+        } else {
+            guard ours else { return true }
+            updated = JSONMinimalEditor.deleteTopLevelKey(in: original, key: "statusLine")
+        }
+        guard let updated, parseJSONString(updated) != nil else { return false }
+        // 原子写到实际目标，保留点文件的符号链接。
+        let target = ConfigPathIdentity.writeTarget(for: path)
+        return (try? Data(updated.utf8).write(to: URL(fileURLWithPath: target), options: .atomic)) != nil
+    }
 
     /// `~/.codeisland` is this user's alone (PrivateFiles): sessions.json
     /// there holds every local session's last prompt and reply. Made 0700,

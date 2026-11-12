@@ -2,6 +2,30 @@ import XCTest
 @testable import CodeIslandCore
 
 final class CodexUsageScannerTests: XCTestCase {
+    func testHistoryIncludesArchivedRolloutsOnlyOnce() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let fm = FileManager.default
+        defer { try? fm.removeItem(at: root) }
+        let now = Date()
+        let day = Calendar.current.startOfDay(for: now)
+        let previousDay = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -1, to: day))
+        let timestamp = ISO8601DateFormatter().string(from: previousDay.addingTimeInterval(60))
+        let line = #"{"type":"event_msg","timestamp":"\#(timestamp)","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":700,"output_tokens":200}}}}"#
+        for (folder, filename) in [("sessions", "rollout-copy"), ("archived_sessions", "rollout-copy"),
+                                   ("archived_sessions", "rollout-only-in-archive")] {
+            let dir = root.appendingPathComponent(folder)
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try (line + "\n").write(to: dir.appendingPathComponent(filename + ".jsonl"), atomically: true, encoding: .utf8)
+        }
+
+        var cache = CodexUsageScanner.FileCache()
+        let snapshot = CodexUsageScanner.scan(codexHomes: [root.path, root.path], now: now,
+                                              includeHistory: true, cache: &cache)
+        XCTAssertEqual(snapshot.dailyTotals[previousDay]?.recordedTokens, 2400)
+        XCTAssertEqual(snapshot.dailyTotals[previousDay]?.cacheReadTokens, 1400)
+        XCTAssertTrue(snapshot.today.isEmpty)
+    }
+
     func testWindowsIncrementalSnapshotsAndDuplicateRoots() throws {
         let root = NSTemporaryDirectory() + "codex-usage-" + UUID().uuidString
         let dir = root + "/sessions/2026/11/02"

@@ -5,8 +5,8 @@ import Foundation
 /// The Codex transport is newline-delimited JSON; the fields below match
 /// JSON-RPC 2.0 with a tolerant reading of responses (the server omits the
 /// `jsonrpc` marker on successful replies, which is fine for clients).
-public struct CodexJSONRPCMessage: Equatable {
-    public enum Kind: Equatable {
+public struct CodexJSONRPCMessage: Equatable, Sendable {
+    public enum Kind: Equatable, Sendable {
         case request(method: String, id: CodexRequestID)
         case notification(method: String)
         case response(id: CodexRequestID)
@@ -23,7 +23,7 @@ public struct CodexJSONRPCMessage: Equatable {
 }
 
 /// Matches JSON-RPC's union type for request/response ids: int or string.
-public enum CodexRequestID: Hashable {
+public enum CodexRequestID: Hashable, Sendable {
     case int(Int64)
     case string(String)
 
@@ -45,7 +45,7 @@ public enum CodexRequestID: Hashable {
 
 /// Lightweight, untyped wrapper around `Any` so message records round-trip
 /// through `Equatable` without forcing the full schema to be modeled here.
-public enum AnyCodableLike: Equatable {
+public enum AnyCodableLike: Equatable, Sendable {
     case null
     case bool(Bool)
     case int(Int64)
@@ -58,13 +58,11 @@ public enum AnyCodableLike: Equatable {
         switch value {
         case nil: return .null
         case let v as NSNull: _ = v; return .null
-        case let v as Bool: return .bool(v)
-        case let v as Int: return .int(Int64(v))
-        case let v as Int64: return .int(v)
         case let v as NSNumber:
+            // JSON 中的 0 和 1 也可以桥接成 Bool，需按原始类型区分。
+            if CFGetTypeID(v) == CFBooleanGetTypeID() { return .bool(v.boolValue) }
             if CFNumberIsFloatType(v) { return .double(v.doubleValue) }
             return .int(v.int64Value)
-        case let v as Double: return .double(v)
         case let v as String: return .string(v)
         case let v as [Any]: return .array(v.map(AnyCodableLike.from))
         case let v as [String: Any]:

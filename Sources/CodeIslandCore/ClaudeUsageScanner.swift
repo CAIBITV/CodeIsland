@@ -8,15 +8,26 @@ public struct ClaudeUsageTotals: Equatable, Sendable {
     public var messageCount = 0
 
     public var isEmpty: Bool { messageCount == 0 }
+    public var recordedTokens: Int { inputTokens + cacheCreationTokens + cacheReadTokens + outputTokens }
 
     public init() {}
 
-    mutating func add(_ other: ClaudeUsageTotals) {
+    public mutating func add(_ other: ClaudeUsageTotals) {
         inputTokens += other.inputTokens
         outputTokens += other.outputTokens
         cacheCreationTokens += other.cacheCreationTokens
         cacheReadTokens += other.cacheReadTokens
         messageCount += other.messageCount
+    }
+}
+
+/// 使用本机自然日，跨夏令时也以日历午夜作为分界。
+public enum UsageHistoryDays {
+    public static let count = 7
+
+    public static func dates(endingAt now: Date, calendar: Calendar = .current) -> [Date] {
+        let today = calendar.startOfDay(for: now)
+        return ((1 - count)...0).compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
     }
 }
 
@@ -35,12 +46,15 @@ public enum ClaudeUsageScanner {
         /// index 0 oldest, last index = the current hour.
         public let hourlyOutputTokens: [Int]
         public let scannedAt: Date
+        public let dailyTotals: [Date: ClaudeUsageTotals]
 
-        public init(last5h: ClaudeUsageTotals, today: ClaudeUsageTotals, hourlyOutputTokens: [Int], scannedAt: Date) {
+        public init(last5h: ClaudeUsageTotals, today: ClaudeUsageTotals, hourlyOutputTokens: [Int], scannedAt: Date,
+                    dailyTotals: [Date: ClaudeUsageTotals] = [:]) {
             self.last5h = last5h
             self.today = today
             self.hourlyOutputTokens = hourlyOutputTokens
             self.scannedAt = scannedAt
+            self.dailyTotals = dailyTotals
         }
 
         /// 多个来源相加：各窗口累加，每小时柱逐个相加，扫描时间取最晚。
@@ -49,15 +63,17 @@ public enum ClaudeUsageScanner {
             var last5h = ClaudeUsageTotals()
             var today = ClaudeUsageTotals()
             var hourly = [Int](repeating: 0, count: first.hourlyOutputTokens.count)
+            var daily: [Date: ClaudeUsageTotals] = [:]
             for snapshot in snapshots {
                 last5h.add(snapshot.last5h)
                 today.add(snapshot.today)
                 for (index, value) in snapshot.hourlyOutputTokens.enumerated() where index < hourly.count {
                     hourly[index] += value
                 }
+                for (day, totals) in snapshot.dailyTotals { daily[day, default: .init()].add(totals) }
             }
             let scannedAt = snapshots.map(\.scannedAt).max() ?? first.scannedAt
-            return Snapshot(last5h: last5h, today: today, hourlyOutputTokens: hourly, scannedAt: scannedAt)
+            return Snapshot(last5h: last5h, today: today, hourlyOutputTokens: hourly, scannedAt: scannedAt, dailyTotals: daily)
         }
     }
 
@@ -103,16 +119,20 @@ public enum ClaudeUsageScanner {
     public static func scan(
         claudeHomes: [String],
         now: Date = Date(),
+        calendar: Calendar = .current,
+        includeHistory: Bool = false,
         cache: inout FileCache
     ) -> Snapshot {
         let fiveHoursAgo = now.addingTimeInterval(-5 * 3600)
-        let midnight = Calendar.current.startOfDay(for: now)
+        let midnight = calendar.startOfDay(for: now)
         let sparklineStart = now.addingTimeInterval(-Double(sparklineHours) * 3600)
-        let cutoff = min(fiveHoursAgo, midnight, sparklineStart)
+        let historyStart = includeHistory ? UsageHistoryDays.dates(endingAt: now, calendar: calendar).first : nil
+        let cutoff = min(fiveHoursAgo, midnight, sparklineStart, historyStart ?? now)
 
         var last5h = ClaudeUsageTotals()
         var today = ClaudeUsageTotals()
         var hourly = [Int](repeating: 0, count: sparklineHours)
+        var daily: [Date: ClaudeUsageTotals] = [:]
         var activeFiles = Set<String>()
 
         let fm = FileManager.default
@@ -145,6 +165,9 @@ public enum ClaudeUsageScanner {
                     cache.files[path] = entry
 
                     for message in entry.entries.values where message.timestamp <= now {
+                        if let historyStart, message.timestamp >= historyStart {
+                            daily[calendar.startOfDay(for: message.timestamp), default: .init()].add(message.usage)
+                        }
                         if message.timestamp >= fiveHoursAgo { last5h.add(message.usage) }
                         if message.timestamp >= midnight { today.add(message.usage) }
                         let hoursAgo = Int(now.timeIntervalSince(message.timestamp) / 3600)
@@ -157,7 +180,7 @@ public enum ClaudeUsageScanner {
         }
         // Files that fell out of the mtime window carry no in-window entries.
         cache.files = cache.files.filter { activeFiles.contains($0.key) }
-        return Snapshot(last5h: last5h, today: today, hourlyOutputTokens: hourly, scannedAt: now)
+        return Snapshot(last5h: last5h, today: today, hourlyOutputTokens: hourly, scannedAt: now, dailyTotals: daily)
     }
 
     /// Read bytes past `entry.consumedBytes` and parse the COMPLETE lines only —

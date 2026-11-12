@@ -123,7 +123,9 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
     @AppStorage(SettingsKey.collapsedWidthScale) private var collapsedWidthScale = SettingsDefaults.collapsedWidthScale
+    @AppStorage(SettingsKey.showUsageStats) private var showUsageStats = SettingsDefaults.showUsageStats
     @AppStorage(SettingsKey.showClaudeQuota) private var showClaudeQuota = SettingsDefaults.showClaudeQuota
+    @AppStorage(SettingsKey.showCodexQuota) private var showCodexQuota = SettingsDefaults.showCodexQuota
     @AppStorage(SettingsKey.claudeQuotaChip) private var claudeQuotaChip = SettingsDefaults.claudeQuotaChip
     @AppStorage(SettingsKey.hapticOnHover) private var hapticOnHover = SettingsDefaults.hapticOnHover
     @AppStorage(SettingsKey.hapticIntensity) private var hapticIntensity = SettingsDefaults.hapticIntensity
@@ -154,17 +156,20 @@ struct NotchPanelView: View {
     @State private var rightWingWidth: CGFloat = 0
 
     private var isActive: Bool { !appState.sessions.isEmpty }
+    private var showIdleUsage: Bool {
+        !isActive && !hideWhenNoSession && appState.surface == .sessionList && appState.usageDetailSource != nil
+    }
     /// First launch / no-session state should still render a visible marker so the app
     /// doesn't disappear completely behind the physical notch.
     private var showIdleIndicator: Bool {
-        !isActive && !hideWhenNoSession
+        !isActive && !hideWhenNoSession && !showIdleUsage
     }
     /// Whether the bar content should be visible (respects hideWhenNoSession)
     private var showBar: Bool {
         isActive && !(hideWhenNoSession && appState.activeSessionCount == 0)
     }
     private var shouldShowExpanded: Bool {
-        showBar && appState.surface.isExpanded
+        (showBar && appState.surface.isExpanded) || showIdleUsage
     }
     /// Prehover acknowledgement is only rendered on the collapsed active bar —
     /// once the surface expands (from hover or any other path) it disappears.
@@ -200,8 +205,8 @@ struct NotchPanelView: View {
     private var panelWidth: CGFloat {
         let nw = effectiveNotchW
         if showIdleIndicator { return idleHovered ? nw + compactWingWidth * 2 + 80 : nw + compactWingWidth * 2 }
-        if !isActive { return hasNotch ? nw - 20 : nw }
         if shouldShowExpanded { return min(max(nw + 200, 580), maxPanelWidth) }
+        if !isActive { return hasNotch ? nw - 20 : nw }
         return collapsedBarWidth + quotaReserve.extraWidth + rightWingReserve
     }
 
@@ -300,7 +305,17 @@ struct NotchPanelView: View {
                         notchW: effectiveNotchW,
                         notchHeight: notchHeight,
                         hasNotch: hasNotch,
-                        hovered: idleHovered
+                        hovered: idleHovered,
+                        showsUsage: showUsageStats || showClaudeQuota || showCodexQuota,
+                        onOpenUsage: {
+                            hoverTimer?.invalidate()
+                            hoverTimer = nil
+                            isHovered = true
+                            withAnimation(NotchAnimation.open) {
+                                appState.surface = .sessionList
+                                appState.usageDetailSource = .all
+                            }
+                        }
                     )
                 } else {
                     // Idle: just the notch shell
@@ -404,11 +419,22 @@ struct NotchPanelView: View {
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { removalBannerHeight = $0 }
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                             }
-                            SessionListView(
-                                appState: appState,
-                                onlySessionId: nil,
-                                reservedHeight: pending == nil ? 0 : removalBannerHeight
-                            )
+                            let reservedHeight = pending == nil ? 0 : removalBannerHeight
+                            if let source = appState.usageDetailSource {
+                                UsageDetailView(
+                                    monitor: appState.usageDetails,
+                                    claudeQuota: appState.claudeQuota,
+                                    source: source,
+                                    reservedHeight: notchHeight + reservedHeight + 8,
+                                    onSelect: { appState.usageDetailSource = $0 },
+                                    onBack: {
+                                        if appState.sessions.isEmpty { appState.surface = .collapsed }
+                                        else { appState.usageDetailSource = nil }
+                                    }
+                                )
+                            } else {
+                                SessionListView(appState: appState, reservedHeight: reservedHeight)
+                            }
                         }
                         .animation(reduceMotion ? nil : NotchAnimation.micro, value: appState.pendingIdleSessionRemoval != nil)
                         .transition(.blurFade.combined(with: .move(edge: .top)))
@@ -1330,6 +1356,8 @@ private struct IdleIndicatorBar: View {
     let notchHeight: CGFloat
     let hasNotch: Bool
     let hovered: Bool
+    let showsUsage: Bool
+    let onOpenUsage: () -> Void
     @ObservedObject private var l10n = L10n.shared
     @AppStorage(SettingsKey.soundEnabled) private var soundEnabled = SettingsDefaults.soundEnabled
     @AppStorage(SettingsKey.defaultSource) private var defaultSource = SettingsDefaults.defaultSource
@@ -1353,9 +1381,13 @@ private struct IdleIndicatorBar: View {
                     // Gives way to the quit pill: the hovered bar is only a
                     // little wider than its buttons.
                     if !quit.isArmed {
-                        Text("0")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.5))
+                        if showsUsage {
+                            NotchIconButton(icon: "chart.bar.xaxis", tooltip: l10n["usage_detail_title"], action: onOpenUsage)
+                        } else {
+                            Text("0")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
                     }
 
                     HStack(spacing: 4) {
@@ -2963,6 +2995,7 @@ private struct SessionListView: View {
     @AppStorage(SettingsKey.maxVisibleSessions) private var maxVisibleSessions = SettingsDefaults.maxVisibleSessions
     @AppStorage(SettingsKey.showUsageStats) private var showUsageStats = SettingsDefaults.showUsageStats
     @AppStorage(SettingsKey.showClaudeQuota) private var showClaudeQuota = SettingsDefaults.showClaudeQuota
+    @AppStorage(SettingsKey.showCodexQuota) private var showCodexQuota = SettingsDefaults.showCodexQuota
     @AppStorage(SettingsKey.sessionListDensity) private var densityRaw = SettingsDefaults.sessionListDensity
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.showProjectName) private var showProjectName = SettingsDefaults.showProjectName
@@ -3161,7 +3194,11 @@ private struct SessionListView: View {
             // Full session list only — the completion card stays focused on
             // the finished session.
             if onlySessionId == nil {
-                SessionListFooter(appState: appState, showUsageStats: showUsageStats, showClaudeQuota: showClaudeQuota)
+                SessionListFooter(appState: appState, showUsageStats: showUsageStats, showClaudeQuota: showClaudeQuota,
+                                  showCodexQuota: showCodexQuota)
+                    .task(id: showCodexQuota) {
+                        if showCodexQuota { appState.usageDetails.refreshCodex(includeLifetime: false) }
+                    }
             }
         }
     }
@@ -3611,9 +3648,12 @@ private struct SessionListFooter: View {
     var appState: AppState
     let showUsageStats: Bool
     let showClaudeQuota: Bool
+    let showCodexQuota: Bool
 
     var body: some View {
         let usage = UsageFooterText.shownUsage(appState.claudeUsage, enabled: showUsageStats)
+        let codexUsage = UsageFooterText.shownUsage(appState.codexUsage, enabled: showUsageStats)
+        let codexWindows = showCodexQuota ? (appState.usageDetails.codexAccount?.windows ?? []).filter { $0.name == nil } : []
         let snapshot = appState.claudeQuota.snapshot
         let error = appState.claudeQuota.lastError
         let content = SessionListFooterContent.resolve(
@@ -3623,27 +3663,68 @@ private struct SessionListFooter: View {
             hasUsage: usage != nil
         )
         if content.limits, let snapshot {
-            QuotaFooterLine(snapshot: snapshot, error: error, usage: usage)
+            detailsLink(.claude) {
+                QuotaFooterLine(limits: .claude(snapshot), refreshFailed: error != nil, usage: usage)
+            }
         }
-        let candidates = [("claude", usage), ("codex", UsageFooterText.shownUsage(appState.codexUsage, enabled: showUsageStats))]
+        if !codexWindows.isEmpty {
+            detailsLink(.codex) {
+                QuotaFooterLine(limits: .codex(codexWindows), refreshFailed: appState.usageDetails.codexLimitsRefreshFailed,
+                                usage: codexUsage)
+            }
+        }
+        let candidates = [("claude", usage), ("codex", codexUsage)]
             .compactMap { source, usage in usage.map { UsageFooterSources.Entry(source: source, usage: $0) } }
+        let quotaSources = Set([content.limits ? "claude" : nil, codexWindows.isEmpty ? nil : "codex"].compactMap { $0 })
         let sources = UsageFooterSources.resolve(
             candidates,
             sessionSources: appState.localSessionSources,
-            excluding: content.limits ? ["claude"] : [],
+            excluding: quotaSources,
             isEnabled: ConfigInstaller.isEnabled(source:)
         )
         ForEach(sources.lines, id: \.source) { entry in
-            UsageFooterLine(usage: entry.usage, brand: UsageFooterSources.brand(entry.source),
-                            tooltipTitle: UsageFooterSources.tooltipTitle(entry.source, l10n: L10n.shared))
+            detailsLink(UsageDetailSource(rawValue: entry.source) ?? .all) {
+                UsageFooterLine(usage: entry.usage, brand: UsageFooterSources.brand(entry.source),
+                                tooltipTitle: UsageFooterSources.tooltipTitle(entry.source, l10n: L10n.shared))
+            }
         }
         if let total = ClaudeUsageScanner.Snapshot.merged(sources.merged.map(\.usage)) {
-            UsageFooterLine(usage: total, brand: L10n.shared["usage_total"],
-                            tooltipOverride: UsageFooterSources.mergedTooltip(sources.merged, l10n: L10n.shared))
+            detailsLink(.all) {
+                UsageFooterLine(usage: total, brand: L10n.shared["usage_total"],
+                                tooltipOverride: UsageFooterSources.mergedTooltip(sources.merged, l10n: L10n.shared))
+            }
+        }
+        if quotaSources.isEmpty && sources.lines.isEmpty && sources.merged.isEmpty && (showUsageStats || showClaudeQuota || showCodexQuota) {
+            detailsLink(.all) {
+                Label(L10n.shared["usage_detail_title"], systemImage: "chart.bar.xaxis")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+            }
         }
         if content.quotaMessage, let error {
             QuotaFooterMessage(error: error)
         }
+    }
+
+    private func detailsLink<Content: View>(_ source: UsageDetailSource, @ViewBuilder content: () -> Content) -> some View {
+        Button {
+            appState.usageDetailSource = source
+        } label: {
+            HStack(spacing: 0) {
+                content()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.48))
+                    .padding(.trailing, 14)
+                    .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(Text(L10n.shared["usage_detail_title"]))
     }
 }
 
@@ -3651,8 +3732,28 @@ private struct SessionListFooter: View {
 /// percent (warning colours near the cap) and reset countdown, then the
 /// token sparkline. Token totals and pace numbers are in the tooltip.
 private struct QuotaFooterLine: View {
-    let snapshot: ClaudeQuotaSnapshot
-    let error: ClaudeQuotaClientError?
+    enum Limits {
+        case claude(ClaudeQuotaSnapshot)
+        case codex([CodexAccountUsage.Window])
+
+        var source: UsageDetailSource {
+            switch self {
+            case .claude: return .claude
+            case .codex: return .codex
+            }
+        }
+    }
+
+    private struct Window {
+        let label: String
+        let percent: Double
+        let level: ClaudeQuotaLimit.Level
+        let resetsAt: Date?
+        let elapsedFraction: Double?
+    }
+
+    let limits: Limits
+    let refreshFailed: Bool
     let usage: ClaudeUsageScanner.Snapshot?
     @ObservedObject private var l10n = L10n.shared
 
@@ -3662,23 +3763,23 @@ private struct QuotaFooterLine: View {
         // Countdowns tick once a minute; the panel is only open briefly.
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let now = context.date
-            let tooltip = UsageFooterText.limitsTooltip(
-                snapshot, stale: error != nil, usage: usage, l10n: l10n, now: now
-            )
+            let windows = makeWindows(now: now)
+            let warning = staleNotice(windows: windows, now: now)
+            let tooltip = tooltip(windows: windows, warning: warning, now: now)
             HStack(spacing: 8) {
                 // Too narrow for every window with its countdown (long
                 // model name, large text): the countdowns go first, to the
                 // tooltip.
                 ViewThatFits(in: .horizontal) {
-                    windows(now: now, countdowns: true)
-                    windows(now: now, countdowns: false)
+                    windowRow(windows, now: now, countdowns: true)
+                    windowRow(windows, now: now, countdowns: false)
                 }
                 Spacer(minLength: 0)
-                if error != nil {
+                if let warning {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 9))
                         .foregroundStyle(QuotaStyle.warning)
-                        .help(l10n["quota_stale"])
+                        .help(warning)
                 }
                 if let usage {
                     UsageSparkline(buckets: usage.hourlyOutputTokens)
@@ -3696,26 +3797,79 @@ private struct QuotaFooterLine: View {
         }
     }
 
-    private func windows(now: Date, countdowns: Bool) -> some View {
+    private func makeWindows(now: Date) -> [Window] {
+        switch limits {
+        case .claude(let snapshot):
+            return snapshot.ordered.map {
+                Window(label: UsageFooterText.windowLabel($0, l10n: l10n), percent: $0.percent,
+                       level: UsageFooterText.level($0), resetsAt: $0.resetsAt, elapsedFraction: $0.elapsedFraction(now: now))
+            }
+        case .codex(let windows):
+            return windows.map { window in
+                let seconds = window.minutes.map { Double($0) * 60 }
+                let label = seconds.map(ClaudeQuotaFormat.duration) ?? l10n["quota_label"]
+                let percent = Double(window.usedPercent)
+                let level: ClaudeQuotaLimit.Level = percent >= 100 ? .critical
+                    : (percent >= ClaudeQuotaSelector.alertPercent ? .warning : .normal)
+                var elapsed: Double?
+                if let seconds, seconds > 0, let reset = window.resetsAt, reset > now {
+                    elapsed = min(max(1 - reset.timeIntervalSince(now) / seconds, 0), 1)
+                }
+                return Window(label: label, percent: percent, level: level, resetsAt: window.resetsAt, elapsedFraction: elapsed)
+            }
+        }
+    }
+
+    private func staleNotice(windows: [Window], now: Date) -> String? {
+        if refreshFailed { return l10n["quota_stale"] }
+        if case .codex = limits, windows.contains(where: { $0.resetsAt.map { $0 <= now } ?? false }) {
+            return l10n["usage_detail_window_elapsed"]
+        }
+        return nil
+    }
+
+    private func tooltip(windows: [Window], warning: String?, now: Date) -> String {
+        let title = "\(limits.source.title) · \(l10n["usage_detail_plan_limits"])"
+        switch limits {
+        case .claude(let snapshot):
+            let details = UsageFooterText.limitsTooltip(snapshot, stale: refreshFailed, usage: usage, l10n: l10n, now: now)
+            return [title, details].joined(separator: "\n")
+        case .codex:
+            var lines = [title]
+            for window in windows {
+                var parts = ["\(window.label) \(ClaudeQuotaFormat.percent(window.percent))"]
+                if let resetsAt = window.resetsAt, let countdown = ClaudeQuotaFormat.countdown(until: resetsAt, now: now) {
+                    parts.append(String(format: l10n["quota_resets_in"], countdown))
+                }
+                lines.append(parts.joined(separator: " · "))
+            }
+            if let warning { lines.append(warning) }
+            if let usage { lines += ["", UsageFooterText.usageTooltip(usage, l10n: l10n, title: l10n["codex_usage_tooltip_title"])] }
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    private func windowRow(_ windows: [Window], now: Date, countdowns: Bool) -> some View {
         HStack(spacing: 12) {
-            ForEach(Array(snapshot.ordered.enumerated()), id: \.offset) { _, limit in
+            Text(limits.source.title).foregroundStyle(.white.opacity(0.6))
+            ForEach(Array(windows.enumerated()), id: \.offset) { _, limit in
                 segment(limit, now: now, countdown: countdowns)
             }
         }
         .lineLimit(1)
     }
 
-    private func segment(_ limit: ClaudeQuotaLimit, now: Date, countdown: Bool) -> some View {
-        let color = QuotaStyle.color(UsageFooterText.level(limit))
+    private func segment(_ limit: Window, now: Date, countdown: Bool) -> some View {
+        let color = QuotaStyle.color(limit.level)
         return HStack(spacing: 5) {
-            Text(UsageFooterText.windowLabel(limit, l10n: l10n))
+            Text(limit.label)
                 .foregroundStyle(.white.opacity(0.6))
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.14))
                 Capsule().fill(color)
                     .frame(width: Self.barWidth * min(limit.percent / 100, 1))
                 // Even-pace tick: where usage would be if spread evenly.
-                if let elapsed = limit.elapsedFraction(now: now) {
+                if let elapsed = limit.elapsedFraction {
                     Rectangle()
                         .fill(.white.opacity(0.6))
                         .frame(width: 1, height: 8)

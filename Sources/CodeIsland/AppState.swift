@@ -251,8 +251,11 @@ final class AppState {
     }
     /// Preview-only: mock question payload for DebugHarness (no continuation needed)
     var previewQuestionPayload: QuestionPayload?
+    var usageDetailSource: UsageDetailSource?
     var surface: IslandSurface = .collapsed {
         didSet {
+            if surface != .sessionList { usageDetailSource = nil }
+            if oldValue == .sessionList && surface != .sessionList { usageDetails.endViewingCodex() }
             // Any expansion counts as "seen" for the glance completion dot.
             if surface.isExpanded, glanceCompletionActive {
                 glanceDismissTask?.cancel()
@@ -313,6 +316,7 @@ final class AppState {
     @ObservationIgnored private var sessionUsageScanInFlight = false
     /// Subscription rate limits (5h / weekly) from Anthropic — opt-in, network.
     let claudeQuota = ClaudeQuotaMonitor()
+    let usageDetails = UsageDetailMonitor()
     /// Process-wide, not per-instance: the scan reads one shared history
     /// (`~/.claude`), so two concurrent runs are always duplicate work. Production
     /// has a single AppState and never noticed, but anything constructing several —
@@ -1851,8 +1855,7 @@ final class AppState {
         maybeRefreshGitBranch(for: sessionId, cwdBefore: cwdBeforeReduce, normalizedEventName: normalizedEventName)
         maybeResolveHostHarness(for: sessionId)
 
-        // A finished local Claude turn is booked against the plan limits now —
-        // the quota monitor coalesces these into at most one fetch a minute.
+        // 对话完成后先读本机状态栏记录，额度监视器会补读稍后写入的读数。
         if normalizedEventName == "Stop",
            let s = sessions[sessionId], s.isClaude, s.isRemote != true {
             claudeQuota.noteStop()

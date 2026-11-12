@@ -213,6 +213,15 @@ func recvAll(_ sock: Int32) -> Data {
 let socketPath = SocketPath.path
 let env = ProcessInfo.processInfo.environment
 let args = CommandLine.arguments
+if args.count == 3, args[1] == ClaudeQuotaStatusline.bridgeFlag {
+    alarm(5)
+    guard HookIntake.admits(sourceTag: "claude", environment: env),
+          let profile = ClaudeQuotaStatusline.Profile(configDir: ClaudeConfigPaths.configDir()),
+          profile.key == args[2],
+          let data = try? FileHandle.standardInput.readToEnd(), data.count <= 128 * 1024 else { exit(0) }
+    profile.record(data)
+    exit(0)
+}
 let bridgeLog = BridgeLog(environment: env)
 
 // Parse --source flag (e.g. --source codex)

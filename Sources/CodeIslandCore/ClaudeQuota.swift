@@ -2,8 +2,8 @@ import Foundation
 
 /// One rate-limit window from Anthropic's subscription usage endpoint —
 /// the same numbers Claude Code's `/usage` shows.
-public struct ClaudeQuotaLimit: Equatable, Sendable {
-    public enum Kind: String, Sendable, CaseIterable {
+public struct ClaudeQuotaLimit: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable, CaseIterable {
         /// Rolling 5-hour window.
         case session
         /// 7-day window across all models.
@@ -123,7 +123,7 @@ public struct ClaudeQuotaLimit: Equatable, Sendable {
     }
 }
 
-public struct ClaudeQuotaSnapshot: Equatable, Sendable {
+public struct ClaudeQuotaSnapshot: Codable, Equatable, Sendable {
     public let limits: [ClaudeQuotaLimit]
     public let fetchedAt: Date
 
